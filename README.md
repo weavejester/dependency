@@ -1,4 +1,4 @@
-# Dependency
+# Dependency [![Build Status](https://github.com/weavejester/dependency/actions/workflows/test.yml/badge.svg)](https://github.com/weavejester/dependency/actions/workflows/test.yml)
 
 This is a fork of Alessandra Sierra's [Dependency][] library that adds
 an optional comparator to the `topo-sort` function that provides
