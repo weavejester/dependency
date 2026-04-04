@@ -62,6 +62,17 @@
                (conj expanded node)))
       expanded)))
 
+(defn- reachable? [neighbors from to]
+  (loop [unexpanded (seq (neighbors from))
+         visited #{}]
+    (if-let [[node & more] unexpanded]
+      (cond
+        (= node to) true
+        (contains? visited node) (recur more visited)
+        :else (recur (concat more (neighbors node))
+                     (conj visited node)))
+      false)))
+
 (declare depends?)
 
 (def set-conj (fnil conj #{}))
@@ -85,19 +96,19 @@
                        (set (keys dependents))))
   DependencyGraphUpdate
   (depend [graph node dep]
-    (when (or (= node dep) (depends? graph dep node))
+    (when (or (= node dep) (reachable? dependencies dep node))
       (throw (ex-info (str "Circular dependency between "
                            (pr-str node) " and " (pr-str dep))
                       {:reason ::circular-dependency
                        :node node
                        :dependency dep})))
     (MapDependencyGraph.
-     (update-in dependencies [node] set-conj dep)
-     (update-in dependents [dep] set-conj node)))
+     (update dependencies node set-conj dep)
+     (update dependents dep set-conj node)))
   (remove-edge [graph node dep]
     (MapDependencyGraph.
-     (update-in dependencies [node] disj dep)
-     (update-in dependents [dep] disj node)))
+     (update dependencies node disj dep)
+     (update dependents dep disj node)))
   (remove-all [graph node]
     (MapDependencyGraph.
      (remove-from-map dependencies node)
@@ -113,41 +124,91 @@
 (defn depends?
   "True if x is directly or transitively dependent on y."
   [graph x y]
-  (contains? (transitive-dependencies graph x) y))
+  (if (instance? MapDependencyGraph graph)
+    (reachable? (:dependencies graph) x y)
+    (contains? (transitive-dependencies graph x) y)))
 
 (defn dependent?
   "True if y is a dependent of x."
   [graph x y]
   (contains? (transitive-dependents graph x) y))
 
+(defn- topo-sort-kahn [comp deps depts all-nodes]
+  ;; For each node, count its dependents (out-degree).
+  ;; Nodes with zero out-degree are leaves (nothing depends on them).
+  (let [out-deg (reduce (fn [m node]
+                          (assoc m node (count (get depts node))))
+                        {} all-nodes)
+        leaves (filter #(zero? (get out-deg %)) all-nodes)
+        ;; Without comparator: FIFO queue.
+        ;; With comparator: sorted set as priority queue, picking the
+        ;; largest node each step (reversed comparator). Hash is used
+        ;; as tiebreaker so nodes with equal comparator values don't
+        ;; collapse in the set.
+        initial (if comp
+                  (into (sorted-set-by (fn [a b]
+                                         (let [c (comp b a)]
+                                           (if (zero? c)
+                                             (compare (hash b) (hash a))
+                                             c))))
+                        leaves)
+                  (into #?(:clj clojure.lang.PersistentQueue/EMPTY
+                           :cljs #queue []) leaves))]
+    (loop [candidates initial
+           out-deg out-deg
+           result ()]
+      (if-let [node (if comp (first candidates) (peek candidates))]
+        ;; Prepend this node, then for each of its dependencies,
+        ;; decrement its out-degree. When a dependency's out-degree
+        ;; reaches zero, nothing depends on it anymore, so add it
+        ;; to the candidates.
+        (let [candidates (if comp (disj candidates node) (pop candidates))
+              result (cons node result)
+              [candidates out-deg]
+              (reduce (fn [[c d] dep]
+                        (let [new-d (dec (get d dep))]
+                          [(if (zero? new-d) (conj c dep) c)
+                           (assoc d dep new-d)]))
+                      [candidates out-deg]
+                      (get deps node))]
+          (recur candidates out-deg result))
+        (let [sorted (vec result)]
+          ;; Remaining nodes are in cycles (their out-degree never
+          ;; reached zero). `depend` forbids cycles, so this is just
+          ;; a safeguard.
+          (if (= (count sorted) (count all-nodes))
+            sorted
+            (into sorted (remove (set sorted)) all-nodes)))))))
+
+(defn- topo-sort-generic [comp graph]
+  (let [all-nodes (nodes graph)
+        deps (into {}
+                   (map (fn [n] [n (immediate-dependencies graph n)]))
+                   all-nodes)
+        depts (into {}
+                    (map (fn [n] [n (immediate-dependents graph n)]))
+                    all-nodes)]
+    (topo-sort-kahn comp deps depts all-nodes)))
+
 (defn topo-sort
-  "Returns a topologically-sorted list of nodes in graph. Takes an
-  optional comparator to provide secondary sorting when the order of
-  nodes is ambiguous."
+  "Returns a topologically-sorted list of nodes in graph using Kahn's
+  algorithm (https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm).
+  O(V+E). Takes an optional comparator to provide secondary sorting
+  when the order of nodes is ambiguous."
   ([graph]
-   (topo-sort (constantly 0) graph))
+   (if (instance? MapDependencyGraph graph)
+     (topo-sort-kahn nil
+                     (:dependencies graph)
+                     (:dependents graph)
+                     (nodes graph))
+     (topo-sort-generic nil graph)))
   ([comp graph]
-   (loop [sorted ()
-          g graph
-          todo (set (filter #(empty? (immediate-dependents graph %))
-                            (nodes graph)))]
-     (if (empty? todo)
-       sorted
-       (let [[node & more] (sort #(comp %2 %1) todo)
-             deps (immediate-dependencies g node)
-             [add g'] (loop [deps deps
-                             g g
-                             add #{}]
-                        (if (seq deps)
-                          (let [d (first deps)
-                                g' (remove-edge g node d)]
-                            (if (empty? (immediate-dependents g' d))
-                              (recur (rest deps) g' (conj add d))
-                              (recur (rest deps) g' add)))
-                          [add g]))]
-         (recur (cons node sorted)
-                (remove-node g' node)
-                (clojure.set/union (set more) (set add))))))))
+   (if (instance? MapDependencyGraph graph)
+     (topo-sort-kahn comp
+                     (:dependencies graph)
+                     (:dependents graph)
+                     (nodes graph))
+     (topo-sort-generic comp graph))))
 
 (def ^:private max-number
   #?(:clj Long/MAX_VALUE

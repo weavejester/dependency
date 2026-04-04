@@ -7,7 +7,7 @@
 ;; software.
 
 (ns weavejester.dependency-test
-  (:require [clojure.test :refer [deftest is are]]
+  (:require [clojure.test :refer [deftest is are testing]]
             [weavejester.dependency :refer :all]))
 
 ;; building a graph like:
@@ -344,6 +344,19 @@
            :level24
            :level25a :level25b :level25c :level25d
            :level26])))
+
+(deftest t-topo-sort-comparator-priority
+  (testing "comparator sorts unrelated leaf nodes"
+    (is (= (topo-sort (comparator <) (-> (graph)
+                                         (depend 10 1)
+                                         (depend 5 20)))
+           [1 20 5 10])))
+  (testing "nodes from different depths can interleave when comparator is used"
+    (is (= (topo-sort compare (-> (graph)
+                                  (depend 1 0) (depend 2 0) (depend 3 2)
+                                  (depend 4 2) (depend 5 3) (depend 6 4)
+                                  (depend 7 0) (depend 8 0) (depend 9 5)))
+           [0 1 2 3 4 5 6 7 8 9]))))
 
 (deftest t-no-cycles
   (is (thrown? Exception
