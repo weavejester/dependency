@@ -1,13 +1,13 @@
 # Dependency
 
-This is a fork of Stuart Sierra's [Dependency][] library that adds
+This is a fork of Alessandra Sierra's [Dependency][] library that adds
 an optional comparator to the `topo-sort` function that provides
 secondary ordering when the dependency order is ambiguous. This change
 was made so that `topo-sort` can be deterministic.
 
 It also improves performance thanks to Michiel Borkent's contributions.
 
-In all other respects, this library is the same. Please see Stuart's
+In all other respects, this library is the same. Please see the original
 [README][] for more information.
 
 [dependency]: https://github.com/stuartsierra/dependency
